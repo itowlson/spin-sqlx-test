@@ -3,6 +3,8 @@ use std::fmt::Display;
 // use sqlx::Row;
 use sqlx::ColumnIndex;
 
+mod convert;
+
 impl ColumnIndex<SpinSqliteRow> for usize {
     fn index(&self, container: &SpinSqliteRow) -> Result<usize, sqlx::Error> {
         if *self < container.inner.values.len() {
@@ -20,23 +22,6 @@ impl ColumnIndex<SpinSqliteRow> for &str {
     }
 }
 
-// anyhow::Error makes sqlx mad
-#[derive(Debug)]
-struct BadTypeError;
-impl std::error::Error for BadTypeError {}
-impl Display for BadTypeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("bad type")
-    }
-}
-#[derive(Debug)]
-struct BadValError;
-impl std::error::Error for BadValError {}
-impl Display for BadValError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("bad value")
-    }
-}
 
 #[derive(Debug)]
 pub struct SqlxConnection(spin_sdk::sqlite::Connection);
@@ -125,9 +110,14 @@ pub struct SpinSqliteColumn {
 
 }
 #[derive(Clone, Debug, PartialEq)]
-pub struct SpinSqliteTypeInfo {
-    typename: &'static str,
+pub enum SpinSqliteTypeInfo {
+    Int,
+    Blob,
+    Real,
+    Text,
+    Null,
 }
+
 pub struct SpinSqliteValue {
     // inner: spin_sdk::sqlite::Value,
 }
@@ -199,16 +189,23 @@ impl sqlx::Column for SpinSqliteColumn {
 
 impl Display for SpinSqliteTypeInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.typename)
+        use sqlx::TypeInfo;
+        f.write_str(self.name())
     }
 }
 impl sqlx::TypeInfo for SpinSqliteTypeInfo {
     fn is_null(&self) -> bool {
-        self.typename == "NULL"
+        *self == Self::Null
     }
 
     fn name(&self) -> &str {
-        self.typename
+        match self {
+            Self::Blob => "BINARY",
+            Self::Int => "INT",
+            Self::Null => "NULL",
+            Self::Real => "REAL",
+            Self::Text => "TEXT",
+        }
     }
 }
 
@@ -356,14 +353,14 @@ impl<'q> sqlx::ValueRef<'q> for SpinSqliteValueRef {
     }
 
     fn type_info(&self) -> std::borrow::Cow<'_, <Self::Database as sqlx::Database>::TypeInfo> {
-        let typename = match &self.inner {
-            spin_sdk::sqlite::Value::Null => "NULL",
-            spin_sdk::sqlite::Value::Integer(_) => "INT",
-            spin_sdk::sqlite::Value::Blob(_) => "BINARY",
-            spin_sdk::sqlite::Value::Real(_) => "REAL",
-            spin_sdk::sqlite::Value::Text(_) => "TEXT",
+        let type_info = match &self.inner {
+            spin_sdk::sqlite::Value::Null => SpinSqliteTypeInfo::Null,
+            spin_sdk::sqlite::Value::Integer(_) => SpinSqliteTypeInfo::Int,
+            spin_sdk::sqlite::Value::Blob(_) => SpinSqliteTypeInfo::Blob,
+            spin_sdk::sqlite::Value::Real(_) => SpinSqliteTypeInfo::Real,
+            spin_sdk::sqlite::Value::Text(_) => SpinSqliteTypeInfo::Text,
         };
-        std::borrow::Cow::Owned(SpinSqliteTypeInfo{ typename })
+        std::borrow::Cow::Owned(type_info)
     }
 
     fn is_null(&self) -> bool {
@@ -537,97 +534,3 @@ impl<'c> sqlx::Executor<'c> for &'c SqlxConnection {
     //     (dyn futures_core::Future<Output = Result<sqlx::Describe<<Self as sqlx::Executor<'c>>::Database>, sqlx::Error>> + std::marker::Send + 'e)>> { todo!() }`: `fn describe(self, _: &'q str) -> Pin<Box<(dyn futures_core::Future<Output = Result<Describe<<Self as Executor<'c>>::Database>, sqlx::Error>> + std::marker::Send + 'e)>> { todo!() }
 }
 
-fn into_or_err<T: TryInto<U>, U>(value: T) -> Result<U, sqlx::error::BoxDynError> {
-    match value.try_into() {
-        Ok(v) => Ok(v),
-        Err(e) => Err(Box::new(BadValError)),
-    }
-}
-
-impl<'q> sqlx::Encode<'q, SqlxConnection> for &str {
-    fn encode_by_ref(&self, buf: &mut <SqlxConnection as sqlx::database::HasArguments<'q>>::ArgumentBuffer) -> sqlx::encode::IsNull {
-        buf.push(spin_sdk::sqlite::Value::Text(self.to_string()));
-        sqlx::encode::IsNull::No
-    }
-}
-impl sqlx::Type<SqlxConnection> for &str {
-    fn type_info() -> <SqlxConnection as sqlx::Database>::TypeInfo {
-        SpinSqliteTypeInfo { typename: "TEXT" }
-    }
-}
-
-impl<'r> sqlx::Decode<'r, SqlxConnection> for String {
-    fn decode(value: <SqlxConnection as sqlx::database::HasValueRef<'r>>::ValueRef) -> Result<Self, sqlx::error::BoxDynError> {
-        match value.inner {
-            spin_sdk::sqlite::Value::Text(s) => Ok(s),
-            _ => Err(Box::new(BadTypeError)),
-        }
-    }
-}
-impl sqlx::Type<SqlxConnection> for String {
-    fn type_info() -> <SqlxConnection as sqlx::Database>::TypeInfo {
-        SpinSqliteTypeInfo { typename: "TEXT" }
-    }
-}
-
-impl<'q> sqlx::Encode<'q, SqlxConnection> for u32 {
-    fn encode_by_ref(&self, buf: &mut <SqlxConnection as sqlx::database::HasArguments<'q>>::ArgumentBuffer) -> sqlx::encode::IsNull {
-        buf.push(spin_sdk::sqlite::Value::Integer((*self).into()));
-        sqlx::encode::IsNull::No
-    }
-}
-impl<'r> sqlx::Decode<'r, SqlxConnection> for u32 {
-    fn decode(value: <SqlxConnection as sqlx::database::HasValueRef<'r>>::ValueRef) -> Result<Self, sqlx::error::BoxDynError> {
-        match value.inner {
-            spin_sdk::sqlite::Value::Integer(n) => into_or_err(n),
-            _ => Err(Box::new(BadTypeError)),
-        }
-    }
-}
-impl sqlx::Type<SqlxConnection> for u32 {
-    fn type_info() -> <SqlxConnection as sqlx::Database>::TypeInfo {
-        SpinSqliteTypeInfo { typename: "INT" }
-    }
-}
-
-impl<'q> sqlx::Encode<'q, SqlxConnection> for bool {
-    fn encode_by_ref(&self, buf: &mut <SqlxConnection as sqlx::database::HasArguments<'q>>::ArgumentBuffer) -> sqlx::encode::IsNull {
-        buf.push(spin_sdk::sqlite::Value::Integer(if *self { 1 } else { 0 }));
-        sqlx::encode::IsNull::No
-    }
-}
-impl<'r> sqlx::Decode<'r, SqlxConnection> for bool {
-    fn decode(value: <SqlxConnection as sqlx::database::HasValueRef<'r>>::ValueRef) -> Result<Self, sqlx::error::BoxDynError> {
-        match value.inner {
-            spin_sdk::sqlite::Value::Integer(0) => Ok(false),
-            spin_sdk::sqlite::Value::Integer(1) => Ok(true),
-            spin_sdk::sqlite::Value::Integer(_) => Err(Box::new(BadValError)),
-            _ => Err(Box::new(BadTypeError)),
-        }
-    }
-}
-impl sqlx::Type<SqlxConnection> for bool {
-    fn type_info() -> <SqlxConnection as sqlx::Database>::TypeInfo {
-        SpinSqliteTypeInfo { typename: "INT" }
-    }
-}
-
-impl<'q> sqlx::Encode<'q, SqlxConnection> for f32 {
-    fn encode_by_ref(&self, buf: &mut <SqlxConnection as sqlx::database::HasArguments<'q>>::ArgumentBuffer) -> sqlx::encode::IsNull {
-        buf.push(spin_sdk::sqlite::Value::Real((*self).into()));
-        sqlx::encode::IsNull::No
-    }
-}
-impl<'r> sqlx::Decode<'r, SqlxConnection> for f32 {
-    fn decode(value: <SqlxConnection as sqlx::database::HasValueRef<'r>>::ValueRef) -> Result<Self, sqlx::error::BoxDynError> {
-        match value.inner {
-            spin_sdk::sqlite::Value::Real(n) => Ok(n as f32),  // TODO: what could go wrong eh
-            _ => Err(Box::new(BadTypeError)),
-        }
-    }
-}
-impl sqlx::Type<SqlxConnection> for f32 {
-    fn type_info() -> <SqlxConnection as sqlx::Database>::TypeInfo {
-        SpinSqliteTypeInfo { typename: "REAL" }
-    }
-}

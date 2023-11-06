@@ -14,6 +14,7 @@ struct Pet {
     name: String,
     is_finicky: bool,
     real_thingy: f32,
+    blobbles: Vec<u8>,
 }
 
 // Not traited
@@ -36,6 +37,7 @@ impl<'r> sqlx::FromRow<'r, spin_sqlx::SpinSqliteRow> for Pet {
             name: row.try_get("name")?,
             is_finicky: row.try_get("is_finicky")?,
             real_thingy: row.try_get("real_thingy")?,
+            blobbles: row.try_get("blobbles")?,
         })
     }
 }
@@ -43,7 +45,7 @@ impl<'r> sqlx::FromRow<'r, spin_sqlx::SpinSqliteRow> for Pet {
 impl std::fmt::Display for Pet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let fdesc = if self.is_finicky { "is" } else { "is not" };
-        f.write_fmt(format_args!("{}, aged {}, {} finicky and uh yeah real {}", self.name, self.age, fdesc, self.real_thingy))
+        f.write_fmt(format_args!("{}, aged {}, {} finicky and uh yeah real {}, also blob len is {}", self.name, self.age, fdesc, self.real_thingy, self.blobbles.len()))
     }
 }
 
@@ -66,13 +68,15 @@ async fn handle_sqlxtest(_req: Request) -> anyhow::Result<impl IntoResponse> {
     // let _qr = sqlx::query("INSERT INTO test(name) VALUES ('honk')")
     //     .execute(&sqlx_conn)
     //     .await?;
-    let _qr = sqlx::query("INSERT INTO pets(age, name, is_finicky, real_thingy) VALUES (?, ?, ?, ?)")
-        .bind(18)
-        .bind("Slats")
-        .bind(true)
-        .bind(23.456)
-        .execute(&sqlx_conn)
-        .await?;
+
+    // let _qr = sqlx::query("INSERT INTO pets2(age, name, is_finicky, real_thingy, blobbles) VALUES (?, ?, ?, ?, ?)")
+    //     .bind(1)
+    //     .bind("Rosie")
+    //     .bind(true)
+    //     .bind(6.75)
+    //     .bind(&[6u8, 2, 5, 3, 4, 8])
+    //     .execute(&sqlx_conn)
+    //     .await?;
 
     // We can't do anything with QR - SQLite does not return rows affected or
     // any such jollity
@@ -108,7 +112,8 @@ async fn handle_sqlxtest(_req: Request) -> anyhow::Result<impl IntoResponse> {
     //     .await?;
     // let resp = format!("'{}' is the name, {}ing's the game", p.name, p.name);
 
-    let ps = sqlx::query_as::<_, Pet>("SELECT * FROM pets")
+    let ps = sqlx::query_as::<_, Pet>("SELECT * FROM pets2 WHERE age < ?")
+        .bind(7)
         .fetch(&sqlx_conn);
     use futures::stream::StreamExt;
     let resp = ps.fold("".to_owned(), |acc, pet| async move { format!("{acc}, {}", pet.unwrap()) }).await;
