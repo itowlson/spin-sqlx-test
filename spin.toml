@@ -1,0 +1,19 @@
+spin_manifest_version = 2
+
+[application]
+name = "sqlxtest"
+version = "0.1.0"
+authors = ["itowlson <ivan.towlson@fermyon.com>"]
+description = ""
+
+[[trigger.http]]
+route = "/..."
+component = "sqlxtest"
+
+[component.sqlxtest]
+source = "target/wasm32-wasi/release/sqlxtest.wasm"
+allowed_outbound_hosts = []
+sqlite_databases = ["default"]
+[component.sqlxtest.build]
+command = "cargo build --target wasm32-wasi --release"
+watch = ["src/**/*.rs", "Cargo.toml"]
